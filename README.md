@@ -65,8 +65,12 @@ Nebo starts the app binary with these environment variables:
   `nebo-app-listening 127.0.0.1:<port>` on stdout so Nebo can connect.
 - Refuses every call without `authorization: Bearer <NEBO_SIDECAR_TOKEN>`
   (`UNAUTHENTICATED`), checked once for every service before any handler
-  runs, and refuses to start when `NEBO_SIDECAR_TOKEN` is empty.
-  `NEBO_APP_TOKEN` is never accepted on incoming calls.
+  runs. `NEBO_APP_TOKEN` is never accepted on incoming calls.
+- Answers Nebo's health probe (`UIService.HealthCheck` with an
+  `x-nebo-challenge`) with an `x-nebo-proof` computed from `NEBO_APP_TOKEN`,
+  which proves the answer comes from your app. `UIService` is always served;
+  without a UI handler, `HandleRequest` answers `UNIMPLEMENTED`.
+- Refuses to start when `NEBO_SIDECAR_TOKEN` or `NEBO_APP_TOKEN` is empty.
 - Exits when stdin closes (Nebo is gone) or on SIGTERM/SIGINT.
 
 When your app calls Nebo's API at `NEBO_API_URL`, send
@@ -81,9 +85,11 @@ Everything else the app prints to stdout or stderr goes to the app's
 cd build && ctest --output-on-failure
 ```
 
-Runs the calculator example and a minimal UI app the way Nebo does, and
-checks the announce line, the sidecar token check (the app token is refused),
-Nebo's `UIService.HealthCheck` probe, and shutdown on stdin EOF and SIGTERM.
+Checks the health proof against the shared test vector, then runs the
+calculator example and a minimal UI app the way Nebo does, and checks the
+announce line, the sidecar token check (the app token is refused), the proof
+each app returns to a challenged `UIService.HealthCheck`, and shutdown on
+stdin EOF and SIGTERM.
 
 ## Documentation
 

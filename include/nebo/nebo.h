@@ -55,7 +55,7 @@ void nebo_app_on_configure(nebo_app_t *app, void (*callback)(const nebo_string_m
  * closes or SIGTERM/SIGINT arrives. Every call must carry
  * "authorization: Bearer <NEBO_SIDECAR_TOKEN>".
  * Returns 0 on clean shutdown, non-zero on error (including an empty
- * NEBO_SIDECAR_TOKEN).
+ * NEBO_SIDECAR_TOKEN or NEBO_APP_TOKEN).
  */
 int nebo_app_run(nebo_app_t *app);
 

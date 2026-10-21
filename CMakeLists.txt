@@ -9,6 +9,9 @@ set(CMAKE_CXX_STANDARD 17)
 # Let gRPC pull in protobuf as its own dependency to avoid version conflicts
 find_package(gRPC CONFIG REQUIRED)
 
+# HMAC-SHA256 for the health proof (the OpenSSL gRPC already links)
+find_package(OpenSSL REQUIRED)
+
 # Locate plugins
 find_program(PROTOC protoc REQUIRED)
 find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
@@ -77,6 +80,7 @@ target_include_directories(nebo-sdk PRIVATE
 target_link_libraries(nebo-sdk
     gRPC::grpc++
     protobuf::libprotobuf
+    OpenSSL::Crypto
 )
 
 # ── Calculator example ────────────────────────────────────────────────
@@ -95,6 +99,12 @@ target_link_libraries(probe nebo-sdk)
 add_executable(ui_app tests/ui_app.c)
 target_link_libraries(ui_app nebo-sdk)
 
+add_executable(proof tests/proof.c)
+target_include_directories(proof PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(proof nebo-sdk)
+
+add_test(NAME health_proof_vector COMMAND proof)
+
 add_test(NAME sidecar_contract
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/sidecar_test.sh
-        $<TARGET_FILE:calculator> $<TARGET_FILE:ui_app> $<TARGET_FILE:probe>)
+        $<TARGET_FILE:calculator> $<TARGET_FILE:ui_app> $<TARGET_FILE:probe> $<TARGET_FILE:proof>)

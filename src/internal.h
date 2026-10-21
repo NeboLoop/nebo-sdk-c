@@ -30,6 +30,15 @@ struct nebo_app {
 };
 
 /**
+ * Health proof for Nebo's challenged UIService.HealthCheck: lowercase hex of
+ * HMAC-SHA256(key = app_token, msg = nonce || sidecar_token || port as 2 bytes
+ * big-endian), written to out (65 bytes with the NUL). Returns 0, or -1 when
+ * nonce_hex is not 32 bytes of hex. Implemented in grpc_server.cc.
+ */
+int nebo_health_proof(const char *nonce_hex, const char *app_token,
+                      const char *sidecar_token, int port, char out[65]);
+
+/**
  * Start the gRPC server. Implemented in grpc_server.cc.
  * Blocks until stdin closes or SIGTERM/SIGINT. Returns 0 on clean shutdown.
  */

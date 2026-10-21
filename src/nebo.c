@@ -88,6 +88,12 @@ int nebo_app_run(nebo_app_t *app) {
         return 1;
     }
 
+    if (!app->token || app->token[0] == '\0') {
+        fprintf(stderr, "NEBO_APP_TOKEN not set\n");
+        nebo_app_free(app);
+        return 1;
+    }
+
     if (!app->tool && !app->channel && !app->gateway &&
         !app->ui && !app->comm && !app->schedule) {
         fprintf(stderr, "No handlers registered\n");

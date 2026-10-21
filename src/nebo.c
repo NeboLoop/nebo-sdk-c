@@ -24,6 +24,7 @@ nebo_app_t *nebo_app_new(void) {
     app->version   = safe_getenv("NEBO_APP_VERSION");
     app->data_dir  = safe_getenv("NEBO_DATA_DIR");
     app->token     = safe_getenv("NEBO_APP_TOKEN");
+    app->sidecar_token = safe_getenv("NEBO_SIDECAR_TOKEN");
     app->api_url   = safe_getenv("NEBO_API_URL");
 
     return app;
@@ -73,6 +74,7 @@ void nebo_app_free(nebo_app_t *app) {
     free(app->version);
     free(app->data_dir);
     free(app->token);
+    free(app->sidecar_token);
     free(app->api_url);
     free(app);
 }
@@ -80,8 +82,8 @@ void nebo_app_free(nebo_app_t *app) {
 int nebo_app_run(nebo_app_t *app) {
     if (!app) return 1;
 
-    if (!app->token || app->token[0] == '\0') {
-        fprintf(stderr, "NEBO_APP_TOKEN not set\n");
+    if (!app->sidecar_token || app->sidecar_token[0] == '\0') {
+        fprintf(stderr, "NEBO_SIDECAR_TOKEN not set\n");
         nebo_app_free(app);
         return 1;
     }

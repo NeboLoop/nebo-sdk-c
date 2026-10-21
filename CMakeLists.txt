@@ -92,5 +92,9 @@ add_executable(probe tests/probe.cc)
 target_include_directories(probe PRIVATE ${PROTO_GEN_DIR})
 target_link_libraries(probe nebo-sdk)
 
+add_executable(ui_app tests/ui_app.c)
+target_link_libraries(ui_app nebo-sdk)
+
 add_test(NAME sidecar_contract
-    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/sidecar_test.sh $<TARGET_FILE:calculator> $<TARGET_FILE:probe>)
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/sidecar_test.sh
+        $<TARGET_FILE:calculator> $<TARGET_FILE:ui_app> $<TARGET_FILE:probe>)

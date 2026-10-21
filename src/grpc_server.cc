@@ -15,6 +15,7 @@
 #include <thread>
 
 #include <grpcpp/grpcpp.h>
+#include <grpcpp/security/auth_metadata_processor.h>
 
 #include "proto/apps/v0/common.grpc.pb.h"
 #include "proto/apps/v0/tool.grpc.pb.h"
@@ -31,22 +32,6 @@ extern "C" {
 namespace apb = apps::v0;
 
 /* ── Helpers ─────────────────────────────────────────────────────────── */
-
-/* Every call must carry "authorization: Bearer <NEBO_APP_TOKEN>".
- * Compared in constant time over the expected value's length. */
-static grpc::Status authorize(const grpc::ServerContext *ctx, const nebo_app_t *app) {
-    const std::string expected = std::string("Bearer ") + app->token;
-    const auto &md = ctx->client_metadata();
-    auto it = md.find("authorization");
-    if (it != md.end() && it->second.size() == expected.size()) {
-        unsigned char diff = 0;
-        for (size_t i = 0; i < expected.size(); i++) {
-            diff |= (unsigned char)(it->second.data()[i] ^ expected[i]);
-        }
-        if (diff == 0) return grpc::Status::OK;
-    }
-    return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "missing or invalid app token");
-}
 
 static grpc::Status health_ok(apb::HealthCheckResponse *resp, const nebo_app_t *app) {
     resp->set_healthy(true);
@@ -96,36 +81,31 @@ class ToolBridge final : public apb::ToolService::Service {
 public:
     ToolBridge(const nebo_tool_handler_t *h, const nebo_app_t *app) : h_(h), app_(app) {}
 
-    grpc::Status HealthCheck(grpc::ServerContext *ctx, const apb::HealthCheckRequest *,
+    grpc::Status HealthCheck(grpc::ServerContext *, const apb::HealthCheckRequest *,
                              apb::HealthCheckResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         return health_ok(resp, app_);
     }
 
-    grpc::Status Name(grpc::ServerContext *ctx, const apb::Empty *,
+    grpc::Status Name(grpc::ServerContext *, const apb::Empty *,
                       apb::NameResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (h_->name) resp->set_name(h_->name);
         return grpc::Status::OK;
     }
 
-    grpc::Status Description(grpc::ServerContext *ctx, const apb::Empty *,
+    grpc::Status Description(grpc::ServerContext *, const apb::Empty *,
                              apb::DescriptionResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (h_->description) resp->set_description(h_->description);
         return grpc::Status::OK;
     }
 
-    grpc::Status Schema(grpc::ServerContext *ctx, const apb::Empty *,
+    grpc::Status Schema(grpc::ServerContext *, const apb::Empty *,
                         apb::SchemaResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (h_->schema) resp->set_schema(h_->schema, strlen(h_->schema));
         return grpc::Status::OK;
     }
 
-    grpc::Status Execute(grpc::ServerContext *ctx, const apb::ExecuteRequest *req,
+    grpc::Status Execute(grpc::ServerContext *, const apb::ExecuteRequest *req,
                          apb::ExecuteResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->execute) return grpc::Status(grpc::UNIMPLEMENTED, "no execute handler");
 
         std::string input(req->input().begin(), req->input().end());
@@ -143,16 +123,14 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status RequiresApproval(grpc::ServerContext *ctx, const apb::Empty *,
+    grpc::Status RequiresApproval(grpc::ServerContext *, const apb::Empty *,
                                   apb::ApprovalResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         resp->set_requires_approval(h_->requires_approval ? h_->requires_approval() : 0);
         return grpc::Status::OK;
     }
 
-    grpc::Status Configure(grpc::ServerContext *ctx, const apb::SettingsMap *req,
+    grpc::Status Configure(grpc::ServerContext *, const apb::SettingsMap *req,
                            apb::Empty *) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         configure_handler(*req, app_->on_configure);
         return grpc::Status::OK;
     }
@@ -206,22 +184,19 @@ class ChannelBridge final : public apb::ChannelService::Service {
 public:
     ChannelBridge(const nebo_channel_handler_t *h, const nebo_app_t *app) : h_(h), app_(app) {}
 
-    grpc::Status HealthCheck(grpc::ServerContext *ctx, const apb::HealthCheckRequest *,
+    grpc::Status HealthCheck(grpc::ServerContext *, const apb::HealthCheckRequest *,
                              apb::HealthCheckResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         return health_ok(resp, app_);
     }
 
-    grpc::Status ID(grpc::ServerContext *ctx, const apb::Empty *,
+    grpc::Status ID(grpc::ServerContext *, const apb::Empty *,
                     apb::IDResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (h_->id) resp->set_id(h_->id);
         return grpc::Status::OK;
     }
 
-    grpc::Status Connect(grpc::ServerContext *ctx, const apb::ChannelConnectRequest *req,
+    grpc::Status Connect(grpc::ServerContext *, const apb::ChannelConnectRequest *req,
                          apb::ChannelConnectResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->connect) return grpc::Status::OK;
 
         const char **keys = nullptr, **vals = nullptr;
@@ -233,9 +208,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Disconnect(grpc::ServerContext *ctx, const apb::Empty *,
+    grpc::Status Disconnect(grpc::ServerContext *, const apb::Empty *,
                             apb::ChannelDisconnectResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (h_->disconnect) {
             int ret = h_->disconnect();
             if (ret != 0) resp->set_error("disconnect failed");
@@ -243,9 +217,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Send(grpc::ServerContext *ctx, const apb::ChannelSendRequest *req,
+    grpc::Status Send(grpc::ServerContext *, const apb::ChannelSendRequest *req,
                       apb::ChannelSendResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->send) return grpc::Status::OK;
 
         /* Map proto sender */
@@ -306,16 +279,14 @@ public:
 
     grpc::Status Receive(grpc::ServerContext *ctx, const apb::Empty *,
                          grpc::ServerWriter<apb::InboundMessage> *writer) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->receive) return grpc::Status(grpc::UNIMPLEMENTED, "no receive handler");
         channel_stream_ctx sc{writer, ctx};
         int ret = h_->receive(channel_push_trampoline, &sc);
         return ret == 0 ? grpc::Status::OK : grpc::Status(grpc::INTERNAL, "receive error");
     }
 
-    grpc::Status Configure(grpc::ServerContext *ctx, const apb::SettingsMap *req,
+    grpc::Status Configure(grpc::ServerContext *, const apb::SettingsMap *req,
                            apb::Empty *) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         configure_handler(*req, app_->on_configure);
         return grpc::Status::OK;
     }
@@ -345,15 +316,13 @@ class GatewayBridge final : public apb::GatewayService::Service {
 public:
     GatewayBridge(const nebo_gateway_handler_t *h, const nebo_app_t *app) : h_(h), app_(app) {}
 
-    grpc::Status HealthCheck(grpc::ServerContext *ctx, const apb::HealthCheckRequest *,
+    grpc::Status HealthCheck(grpc::ServerContext *, const apb::HealthCheckRequest *,
                              apb::HealthCheckResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         return health_ok(resp, app_);
     }
 
     grpc::Status Stream(grpc::ServerContext *ctx, const apb::GatewayRequest *req,
                         grpc::ServerWriter<apb::GatewayEvent> *writer) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->stream) return grpc::Status(grpc::UNIMPLEMENTED, "no stream handler");
 
         /* Convert proto messages to C structs */
@@ -405,15 +374,13 @@ public:
         return ret == 0 ? grpc::Status::OK : grpc::Status(grpc::INTERNAL, "stream error");
     }
 
-    grpc::Status Poll(grpc::ServerContext *ctx, const apb::PollRequest *,
+    grpc::Status Poll(grpc::ServerContext *, const apb::PollRequest *,
                       apb::PollResponse *) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         return grpc::Status(grpc::UNIMPLEMENTED, "poll not supported in C SDK");
     }
 
-    grpc::Status Cancel(grpc::ServerContext *ctx, const apb::CancelRequest *req,
+    grpc::Status Cancel(grpc::ServerContext *, const apb::CancelRequest *req,
                         apb::CancelResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (h_->cancel) {
             int ret = h_->cancel(req->request_id().c_str());
             resp->set_cancelled(ret == 0);
@@ -421,9 +388,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Configure(grpc::ServerContext *ctx, const apb::SettingsMap *req,
+    grpc::Status Configure(grpc::ServerContext *, const apb::SettingsMap *req,
                            apb::Empty *) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         configure_handler(*req, app_->on_configure);
         return grpc::Status::OK;
     }
@@ -437,15 +403,13 @@ class UIBridge final : public apb::UIService::Service {
 public:
     UIBridge(const nebo_ui_handler_t *h, const nebo_app_t *app) : h_(h), app_(app) {}
 
-    grpc::Status HealthCheck(grpc::ServerContext *ctx, const apb::HealthCheckRequest *,
+    grpc::Status HealthCheck(grpc::ServerContext *, const apb::HealthCheckRequest *,
                              apb::HealthCheckResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         return health_ok(resp, app_);
     }
 
-    grpc::Status HandleRequest(grpc::ServerContext *ctx, const apb::HttpRequest *req,
+    grpc::Status HandleRequest(grpc::ServerContext *, const apb::HttpRequest *req,
                                apb::HttpResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->handle_request) return grpc::Status(grpc::UNIMPLEMENTED, "no handle_request handler");
 
         /* Map proto headers to C string map */
@@ -481,9 +445,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Configure(grpc::ServerContext *ctx, const apb::SettingsMap *req,
+    grpc::Status Configure(grpc::ServerContext *, const apb::SettingsMap *req,
                            apb::Empty *) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         configure_handler(*req, app_->on_configure);
         return grpc::Status::OK;
     }
@@ -519,29 +482,25 @@ class CommBridge final : public apb::CommService::Service {
 public:
     CommBridge(const nebo_comm_handler_t *h, const nebo_app_t *app) : h_(h), app_(app) {}
 
-    grpc::Status HealthCheck(grpc::ServerContext *ctx, const apb::HealthCheckRequest *,
+    grpc::Status HealthCheck(grpc::ServerContext *, const apb::HealthCheckRequest *,
                              apb::HealthCheckResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         return health_ok(resp, app_);
     }
 
-    grpc::Status Name(grpc::ServerContext *ctx, const apb::Empty *,
+    grpc::Status Name(grpc::ServerContext *, const apb::Empty *,
                       apb::CommNameResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (h_->name) resp->set_name(h_->name());
         return grpc::Status::OK;
     }
 
-    grpc::Status Version(grpc::ServerContext *ctx, const apb::Empty *,
+    grpc::Status Version(grpc::ServerContext *, const apb::Empty *,
                          apb::CommVersionResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (h_->version) resp->set_version(h_->version());
         return grpc::Status::OK;
     }
 
-    grpc::Status Connect(grpc::ServerContext *ctx, const apb::CommConnectRequest *req,
+    grpc::Status Connect(grpc::ServerContext *, const apb::CommConnectRequest *req,
                          apb::CommConnectResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->connect) return grpc::Status::OK;
         const char **keys = nullptr, **vals = nullptr;
         nebo_string_map_t map = proto_map_to_c(req->config(), &keys, &vals);
@@ -553,9 +512,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Disconnect(grpc::ServerContext *ctx, const apb::Empty *,
+    grpc::Status Disconnect(grpc::ServerContext *, const apb::Empty *,
                             apb::CommDisconnectResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->disconnect) return grpc::Status::OK;
         char *err = nullptr;
         int ret = h_->disconnect(&err);
@@ -563,16 +521,14 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status IsConnected(grpc::ServerContext *ctx, const apb::Empty *,
+    grpc::Status IsConnected(grpc::ServerContext *, const apb::Empty *,
                              apb::CommIsConnectedResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (h_->is_connected) resp->set_connected(h_->is_connected());
         return grpc::Status::OK;
     }
 
-    grpc::Status Send(grpc::ServerContext *ctx, const apb::CommSendRequest *req,
+    grpc::Status Send(grpc::ServerContext *, const apb::CommSendRequest *req,
                       apb::CommSendResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->send) return grpc::Status::OK;
         auto &pm = req->message();
 
@@ -594,9 +550,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Subscribe(grpc::ServerContext *ctx, const apb::CommSubscribeRequest *req,
+    grpc::Status Subscribe(grpc::ServerContext *, const apb::CommSubscribeRequest *req,
                            apb::CommSubscribeResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->subscribe) return grpc::Status::OK;
         char *err = nullptr;
         int ret = h_->subscribe(req->topic().c_str(), &err);
@@ -604,9 +559,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Unsubscribe(grpc::ServerContext *ctx, const apb::CommUnsubscribeRequest *req,
+    grpc::Status Unsubscribe(grpc::ServerContext *, const apb::CommUnsubscribeRequest *req,
                              apb::CommUnsubscribeResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->unsubscribe) return grpc::Status::OK;
         char *err = nullptr;
         int ret = h_->unsubscribe(req->topic().c_str(), &err);
@@ -614,9 +568,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Register(grpc::ServerContext *ctx, const apb::CommRegisterRequest *req,
+    grpc::Status Register(grpc::ServerContext *, const apb::CommRegisterRequest *req,
                           apb::CommRegisterResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->reg) return grpc::Status::OK;
         int cap_count = req->capabilities_size();
         auto **caps = new const char *[cap_count];
@@ -628,9 +581,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Deregister(grpc::ServerContext *ctx, const apb::Empty *,
+    grpc::Status Deregister(grpc::ServerContext *, const apb::Empty *,
                             apb::CommDeregisterResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->dereg) return grpc::Status::OK;
         char *err = nullptr;
         int ret = h_->dereg(&err);
@@ -640,16 +592,14 @@ public:
 
     grpc::Status Receive(grpc::ServerContext *ctx, const apb::Empty *,
                          grpc::ServerWriter<apb::CommMessage> *writer) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->receive) return grpc::Status(grpc::UNIMPLEMENTED, "no receive handler");
         comm_stream_ctx sc{writer, ctx};
         int ret = h_->receive(comm_push_trampoline, &sc);
         return ret == 0 ? grpc::Status::OK : grpc::Status(grpc::INTERNAL, "receive error");
     }
 
-    grpc::Status Configure(grpc::ServerContext *ctx, const apb::SettingsMap *req,
+    grpc::Status Configure(grpc::ServerContext *, const apb::SettingsMap *req,
                            apb::Empty *) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         configure_handler(*req, app_->on_configure);
         return grpc::Status::OK;
     }
@@ -710,15 +660,13 @@ class ScheduleBridge final : public apb::ScheduleService::Service {
 public:
     ScheduleBridge(const nebo_schedule_handler_t *h, const nebo_app_t *app) : h_(h), app_(app) {}
 
-    grpc::Status HealthCheck(grpc::ServerContext *ctx, const apb::HealthCheckRequest *,
+    grpc::Status HealthCheck(grpc::ServerContext *, const apb::HealthCheckRequest *,
                              apb::HealthCheckResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         return health_ok(resp, app_);
     }
 
-    grpc::Status Create(grpc::ServerContext *ctx, const apb::CreateScheduleRequest *req,
+    grpc::Status Create(grpc::ServerContext *, const apb::CreateScheduleRequest *req,
                         apb::ScheduleResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->create) return grpc::Status(grpc::UNIMPLEMENTED, "no create handler");
 
         const char **keys = nullptr, **vals = nullptr;
@@ -749,9 +697,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Get(grpc::ServerContext *ctx, const apb::GetScheduleRequest *req,
+    grpc::Status Get(grpc::ServerContext *, const apb::GetScheduleRequest *req,
                      apb::ScheduleResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->get) return grpc::Status(grpc::UNIMPLEMENTED, "no get handler");
         nebo_schedule_t out{};
         char *err = nullptr;
@@ -764,9 +711,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status List(grpc::ServerContext *ctx, const apb::ListSchedulesRequest *req,
+    grpc::Status List(grpc::ServerContext *, const apb::ListSchedulesRequest *req,
                       apb::ListSchedulesResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->list) return grpc::Status(grpc::UNIMPLEMENTED, "no list handler");
         nebo_schedule_t *schedules = nullptr;
         int count = 0;
@@ -786,9 +732,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Update(grpc::ServerContext *ctx, const apb::UpdateScheduleRequest *req,
+    grpc::Status Update(grpc::ServerContext *, const apb::UpdateScheduleRequest *req,
                         apb::ScheduleResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->update) return grpc::Status(grpc::UNIMPLEMENTED, "no update handler");
 
         const char **keys = nullptr, **vals = nullptr;
@@ -819,9 +764,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Delete(grpc::ServerContext *ctx, const apb::DeleteScheduleRequest *req,
+    grpc::Status Delete(grpc::ServerContext *, const apb::DeleteScheduleRequest *req,
                         apb::DeleteScheduleResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->delete_schedule) return grpc::Status(grpc::UNIMPLEMENTED, "no delete handler");
         char *err = nullptr;
         int ret = h_->delete_schedule(req->name().c_str(), &err);
@@ -830,9 +774,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Enable(grpc::ServerContext *ctx, const apb::ScheduleNameRequest *req,
+    grpc::Status Enable(grpc::ServerContext *, const apb::ScheduleNameRequest *req,
                         apb::ScheduleResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->enable) return grpc::Status(grpc::UNIMPLEMENTED, "no enable handler");
         nebo_schedule_t out{};
         char *err = nullptr;
@@ -845,9 +788,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Disable(grpc::ServerContext *ctx, const apb::ScheduleNameRequest *req,
+    grpc::Status Disable(grpc::ServerContext *, const apb::ScheduleNameRequest *req,
                          apb::ScheduleResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->disable) return grpc::Status(grpc::UNIMPLEMENTED, "no disable handler");
         nebo_schedule_t out{};
         char *err = nullptr;
@@ -860,9 +802,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status Trigger(grpc::ServerContext *ctx, const apb::ScheduleNameRequest *req,
+    grpc::Status Trigger(grpc::ServerContext *, const apb::ScheduleNameRequest *req,
                          apb::TriggerResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->trigger) return grpc::Status(grpc::UNIMPLEMENTED, "no trigger handler");
         int success = 0;
         char *output = nullptr;
@@ -874,9 +815,8 @@ public:
         return grpc::Status::OK;
     }
 
-    grpc::Status History(grpc::ServerContext *ctx, const apb::ScheduleHistoryRequest *req,
+    grpc::Status History(grpc::ServerContext *, const apb::ScheduleHistoryRequest *req,
                          apb::ScheduleHistoryResponse *resp) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->history) return grpc::Status(grpc::UNIMPLEMENTED, "no history handler");
         nebo_schedule_history_entry_t *entries = nullptr;
         int count = 0;
@@ -905,22 +845,44 @@ public:
 
     grpc::Status Triggers(grpc::ServerContext *ctx, const apb::Empty *,
                           grpc::ServerWriter<apb::ScheduleTrigger> *writer) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         if (!h_->triggers) return grpc::Status(grpc::UNIMPLEMENTED, "no triggers handler");
         schedule_stream_ctx sc{writer, ctx};
         int ret = h_->triggers(schedule_push_trampoline, &sc);
         return ret == 0 ? grpc::Status::OK : grpc::Status(grpc::INTERNAL, "triggers error");
     }
 
-    grpc::Status Configure(grpc::ServerContext *ctx, const apb::SettingsMap *req,
+    grpc::Status Configure(grpc::ServerContext *, const apb::SettingsMap *req,
                            apb::Empty *) override {
-        if (auto s = authorize(ctx, app_); !s.ok()) return s;
         configure_handler(*req, app_->on_configure);
         return grpc::Status::OK;
     }
 };
 
 /* ── Server entry point ──────────────────────────────────────────────── */
+
+/* Runs for every call on every service, before any handler: the call must
+ * carry "authorization: Bearer <NEBO_SIDECAR_TOKEN>", compared in constant
+ * time over the expected value's length. */
+class SidecarTokenCheck final : public grpc::AuthMetadataProcessor {
+    const std::string expected_;
+public:
+    explicit SidecarTokenCheck(const char *token) : expected_(std::string("Bearer ") + token) {}
+
+    bool IsBlocking() const override { return false; }
+
+    grpc::Status Process(const InputMetadata &md, grpc::AuthContext *, OutputMetadata *,
+                         OutputMetadata *) override {
+        auto it = md.find("authorization");
+        if (it != md.end() && it->second.size() == expected_.size()) {
+            unsigned char diff = 0;
+            for (size_t i = 0; i < expected_.size(); i++) {
+                diff |= (unsigned char)(it->second.data()[i] ^ expected_[i]);
+            }
+            if (diff == 0) return grpc::Status::OK;
+        }
+        return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "missing or invalid sidecar token");
+    }
+};
 
 /* Set by SIGTERM/SIGINT or by stdin reaching EOF; the serve loop then
  * shuts the server down. Only a lock-free atomic store happens in the
@@ -932,10 +894,15 @@ static void signal_handler(int) {
 }
 
 extern "C" int nebo_grpc_serve(nebo_app_t *app) {
-    /* Loopback only; port 0 lets the OS pick a free port. */
+    /* Loopback only (local credentials refuse non-loopback peers); port 0
+     * lets the OS pick a free port. No handshake bytes, so Nebo's plaintext
+     * HTTP/2 client connects as is. */
+    auto creds = grpc::experimental::LocalServerCredentials(LOCAL_TCP);
+    creds->SetAuthMetadataProcessor(std::make_shared<SidecarTokenCheck>(app->sidecar_token));
+
     int port = 0;
     grpc::ServerBuilder builder;
-    builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &port);
+    builder.AddListeningPort("127.0.0.1:0", creds, &port);
 
     /* Conditionally register bridges for each non-NULL handler */
     ToolBridge     *tool_bridge     = nullptr;
@@ -1002,7 +969,6 @@ extern "C" int nebo_grpc_serve(nebo_app_t *app) {
     server->Shutdown(std::chrono::system_clock::now() + std::chrono::seconds(2));
     server->Wait();
     server.reset();
-
     delete tool_bridge;
     delete channel_bridge;
     delete gateway_bridge;

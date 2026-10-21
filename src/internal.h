@@ -16,7 +16,8 @@ struct nebo_app {
     char *name;
     char *version;
     char *data_dir;
-    char *token;
+    char *token;          /* NEBO_APP_TOKEN: outbound, sidecar -> NEBO_API_URL */
+    char *sidecar_token;  /* NEBO_SIDECAR_TOKEN: inbound, Nebo -> sidecar */
     char *api_url;
 
     const nebo_tool_handler_t *tool;

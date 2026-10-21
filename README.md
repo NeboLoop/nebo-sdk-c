@@ -56,14 +56,17 @@ Nebo starts the app binary with these environment variables:
 | `NEBO_APP_DIR` | `nebo_app_dir()` | The app's code folder |
 | `NEBO_DATA_DIR` | `nebo_app_data_dir()` | The app's persistent data folder (also the working directory) |
 | `NEBO_API_URL` | `nebo_app_api_url()` | Nebo's local API, `http://127.0.0.1:<port>` |
-| `NEBO_APP_TOKEN` | `nebo_app_token()` | Per-launch secret |
+| `NEBO_APP_TOKEN` | `nebo_app_token()` | Per-launch secret for your calls to `NEBO_API_URL` |
+| `NEBO_SIDECAR_TOKEN` | (internal) | Per-launch secret Nebo sends on its calls to your app |
 
 `nebo_app_run()` handles the rest:
 
 - Listens on `127.0.0.1` on a port the OS picks, and prints
   `nebo-app-listening 127.0.0.1:<port>` on stdout so Nebo can connect.
-- Refuses every call without `authorization: Bearer <NEBO_APP_TOKEN>`
-  (`UNAUTHENTICATED`), and refuses to start when `NEBO_APP_TOKEN` is empty.
+- Refuses every call without `authorization: Bearer <NEBO_SIDECAR_TOKEN>`
+  (`UNAUTHENTICATED`), checked once for every service before any handler
+  runs, and refuses to start when `NEBO_SIDECAR_TOKEN` is empty.
+  `NEBO_APP_TOKEN` is never accepted on incoming calls.
 - Exits when stdin closes (Nebo is gone) or on SIGTERM/SIGINT.
 
 When your app calls Nebo's API at `NEBO_API_URL`, send
@@ -78,8 +81,9 @@ Everything else the app prints to stdout or stderr goes to the app's
 cd build && ctest --output-on-failure
 ```
 
-Runs the calculator example the way Nebo does and checks the announce line,
-the token check, and shutdown on stdin EOF and SIGTERM.
+Runs the calculator example and a minimal UI app the way Nebo does, and
+checks the announce line, the sidecar token check (the app token is refused),
+Nebo's `UIService.HealthCheck` probe, and shutdown on stdin EOF and SIGTERM.
 
 ## Documentation
 

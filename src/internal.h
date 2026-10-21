@@ -12,11 +12,12 @@ extern "C" {
  */
 struct nebo_app {
     char *dir;
-    char *sock_path;
     char *id;
     char *name;
     char *version;
     char *data_dir;
+    char *token;
+    char *api_url;
 
     const nebo_tool_handler_t *tool;
     const nebo_channel_handler_t *channel;
@@ -29,7 +30,7 @@ struct nebo_app {
 
 /**
  * Start the gRPC server. Implemented in grpc_server.cc.
- * Blocks until SIGTERM/SIGINT. Returns 0 on clean shutdown.
+ * Blocks until stdin closes or SIGTERM/SIGINT. Returns 0 on clean shutdown.
  */
 int nebo_grpc_serve(nebo_app_t *app);
 

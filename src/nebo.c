@@ -26,6 +26,9 @@ nebo_app_t *nebo_app_new(void) {
     app->token     = safe_getenv("NEBO_APP_TOKEN");
     app->sidecar_token = safe_getenv("NEBO_SIDECAR_TOKEN");
     app->api_url   = safe_getenv("NEBO_API_URL");
+    /* Inbound only: the SDK checks it, and a program the app starts never
+     * inherits it. */
+    unsetenv("NEBO_SIDECAR_TOKEN");
 
     return app;
 }

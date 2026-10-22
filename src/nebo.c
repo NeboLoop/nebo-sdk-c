@@ -19,11 +19,16 @@ nebo_app_t *nebo_app_new(void) {
     if (!app) return NULL;
 
     app->dir       = safe_getenv("NEBO_APP_DIR");
-    app->sock_path = safe_getenv("NEBO_APP_SOCK");
     app->id        = safe_getenv("NEBO_APP_ID");
     app->name      = safe_getenv("NEBO_APP_NAME");
     app->version   = safe_getenv("NEBO_APP_VERSION");
-    app->data_dir  = safe_getenv("NEBO_APP_DATA");
+    app->data_dir  = safe_getenv("NEBO_DATA_DIR");
+    app->token     = safe_getenv("NEBO_APP_TOKEN");
+    app->sidecar_token = safe_getenv("NEBO_SIDECAR_TOKEN");
+    app->api_url   = safe_getenv("NEBO_API_URL");
+    /* Inbound only: the SDK checks it, and a program the app starts never
+     * inherits it. */
+    unsetenv("NEBO_SIDECAR_TOKEN");
 
     return app;
 }
@@ -57,28 +62,37 @@ void nebo_app_on_configure(nebo_app_t *app, void (*callback)(const nebo_string_m
 }
 
 const char *nebo_app_dir(const nebo_app_t *app) { return app ? app->dir : ""; }
-const char *nebo_app_sock(const nebo_app_t *app) { return app ? app->sock_path : ""; }
 const char *nebo_app_id(const nebo_app_t *app) { return app ? app->id : ""; }
 const char *nebo_app_name(const nebo_app_t *app) { return app ? app->name : ""; }
 const char *nebo_app_version(const nebo_app_t *app) { return app ? app->version : ""; }
 const char *nebo_app_data_dir(const nebo_app_t *app) { return app ? app->data_dir : ""; }
+const char *nebo_app_token(const nebo_app_t *app) { return app ? app->token : ""; }
+const char *nebo_app_api_url(const nebo_app_t *app) { return app ? app->api_url : ""; }
 
 void nebo_app_free(nebo_app_t *app) {
     if (!app) return;
     free(app->dir);
-    free(app->sock_path);
     free(app->id);
     free(app->name);
     free(app->version);
     free(app->data_dir);
+    free(app->token);
+    free(app->sidecar_token);
+    free(app->api_url);
     free(app);
 }
 
 int nebo_app_run(nebo_app_t *app) {
     if (!app) return 1;
 
-    if (!app->sock_path || app->sock_path[0] == '\0') {
-        fprintf(stderr, "NEBO_APP_SOCK not set\n");
+    if (!app->sidecar_token || app->sidecar_token[0] == '\0') {
+        fprintf(stderr, "NEBO_SIDECAR_TOKEN not set\n");
+        nebo_app_free(app);
+        return 1;
+    }
+
+    if (!app->token || app->token[0] == '\0') {
+        fprintf(stderr, "NEBO_APP_TOKEN not set\n");
         nebo_app_free(app);
         return 1;
     }
@@ -89,8 +103,6 @@ int nebo_app_run(nebo_app_t *app) {
         nebo_app_free(app);
         return 1;
     }
-
-    fprintf(stderr, "[%s] listening on %s\n", app->name, app->sock_path);
 
     int ret = nebo_grpc_serve(app);
 

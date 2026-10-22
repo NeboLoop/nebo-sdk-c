@@ -25,7 +25,7 @@ extern "C" {
 
 typedef struct nebo_app nebo_app_t;
 
-/** Create a new Nebo app. Reads NEBO_APP_* env vars. */
+/** Create a new Nebo app. Reads the NEBO_* env vars Nebo sets. */
 nebo_app_t *nebo_app_new(void);
 
 /** Register a tool capability handler. */
@@ -50,8 +50,12 @@ void nebo_app_register_schedule(nebo_app_t *app, const nebo_schedule_handler_t *
 void nebo_app_on_configure(nebo_app_t *app, void (*callback)(const nebo_string_map_t *settings));
 
 /**
- * Start the gRPC server and block until SIGTERM/SIGINT.
- * Returns 0 on clean shutdown, non-zero on error.
+ * Start the gRPC server on 127.0.0.1 (an OS-picked port), announce it on
+ * stdout as "nebo-app-listening 127.0.0.1:<port>", and block until stdin
+ * closes or SIGTERM/SIGINT arrives. Every call must carry
+ * "authorization: Bearer <NEBO_SIDECAR_TOKEN>".
+ * Returns 0 on clean shutdown, non-zero on error (including an empty
+ * NEBO_SIDECAR_TOKEN or NEBO_APP_TOKEN).
  */
 int nebo_app_run(nebo_app_t *app);
 
@@ -60,9 +64,6 @@ void nebo_app_free(nebo_app_t *app);
 
 /** Get environment variable: NEBO_APP_DIR */
 const char *nebo_app_dir(const nebo_app_t *app);
-
-/** Get environment variable: NEBO_APP_SOCK */
-const char *nebo_app_sock(const nebo_app_t *app);
 
 /** Get environment variable: NEBO_APP_ID */
 const char *nebo_app_id(const nebo_app_t *app);
@@ -73,8 +74,14 @@ const char *nebo_app_name(const nebo_app_t *app);
 /** Get environment variable: NEBO_APP_VERSION */
 const char *nebo_app_version(const nebo_app_t *app);
 
-/** Get environment variable: NEBO_APP_DATA */
+/** Get environment variable: NEBO_DATA_DIR (also the working directory) */
 const char *nebo_app_data_dir(const nebo_app_t *app);
+
+/** Get environment variable: NEBO_APP_TOKEN (send as "Authorization: Bearer <token>" to NEBO_API_URL) */
+const char *nebo_app_token(const nebo_app_t *app);
+
+/** Get environment variable: NEBO_API_URL (Nebo's local API, http://127.0.0.1:<port>) */
+const char *nebo_app_api_url(const nebo_app_t *app);
 
 #ifdef __cplusplus
 }

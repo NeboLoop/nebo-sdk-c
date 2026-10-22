@@ -9,9 +9,15 @@
 #include <cstring>
 #include <string>
 #include <csignal>
-#include <unistd.h>
+#include <cstdio>
+#include <atomic>
+#include <chrono>
+#include <thread>
 
 #include <grpcpp/grpcpp.h>
+#include <grpcpp/security/auth_metadata_processor.h>
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
 
 #include "proto/apps/v0/common.grpc.pb.h"
 #include "proto/apps/v0/tool.grpc.pb.h"
@@ -393,20 +399,67 @@ public:
 
 /* ── UIBridge ────────────────────────────────────────────────────────── */
 
+static int hex_value(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+extern "C" int nebo_health_proof(const char *nonce_hex, const char *app_token,
+                                 const char *sidecar_token, int port, char out[65]) {
+    if (strlen(nonce_hex) != 64) return -1;
+    std::string msg;
+    for (int i = 0; i < 64; i += 2) {
+        int hi = hex_value(nonce_hex[i]), lo = hex_value(nonce_hex[i + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        msg.push_back((char)(hi << 4 | lo));
+    }
+    msg += sidecar_token;
+    msg.push_back((char)((port >> 8) & 0xff));
+    msg.push_back((char)(port & 0xff));
+
+    unsigned char mac[32];
+    unsigned int mac_len = 0;
+    HMAC(EVP_sha256(), app_token, (int)strlen(app_token),
+         (const unsigned char *)msg.data(), msg.size(), mac, &mac_len);
+
+    static const char digits[] = "0123456789abcdef";
+    for (unsigned int i = 0; i < mac_len; i++) {
+        out[2 * i] = digits[mac[i] >> 4];
+        out[2 * i + 1] = digits[mac[i] & 0xf];
+    }
+    out[2 * mac_len] = '\0';
+    return 0;
+}
+
+/* Always registered: Nebo's health probe is UIService.HealthCheck, which
+ * answers its x-nebo-challenge with an x-nebo-proof. h_ is NULL when the
+ * app has no UI handler. */
 class UIBridge final : public apb::UIService::Service {
     const nebo_ui_handler_t *h_;
     const nebo_app_t *app_;
+    const int *port_; /* filled by BuildAndStart before any call is served */
 public:
-    UIBridge(const nebo_ui_handler_t *h, const nebo_app_t *app) : h_(h), app_(app) {}
+    UIBridge(const nebo_ui_handler_t *h, const nebo_app_t *app, const int *port)
+        : h_(h), app_(app), port_(port) {}
 
-    grpc::Status HealthCheck(grpc::ServerContext *, const apb::HealthCheckRequest *,
+    grpc::Status HealthCheck(grpc::ServerContext *ctx, const apb::HealthCheckRequest *,
                              apb::HealthCheckResponse *resp) override {
+        const auto &md = ctx->client_metadata();
+        auto it = md.find("x-nebo-challenge");
+        char proof[65];
+        if (it != md.end() &&
+            nebo_health_proof(std::string(it->second.data(), it->second.size()).c_str(),
+                              app_->token, app_->sidecar_token, *port_, proof) == 0) {
+            ctx->AddInitialMetadata("x-nebo-proof", proof);
+        }
         return health_ok(resp, app_);
     }
 
     grpc::Status HandleRequest(grpc::ServerContext *, const apb::HttpRequest *req,
                                apb::HttpResponse *resp) override {
-        if (!h_->handle_request) return grpc::Status(grpc::UNIMPLEMENTED, "no handle_request handler");
+        if (!h_ || !h_->handle_request) return grpc::Status(grpc::UNIMPLEMENTED, "no handle_request handler");
 
         /* Map proto headers to C string map */
         const char **hdr_keys = nullptr, **hdr_vals = nullptr;
@@ -856,20 +909,49 @@ public:
 
 /* ── Server entry point ──────────────────────────────────────────────── */
 
-static std::unique_ptr<grpc::Server> g_server;
+/* Runs for every call on every service, before any handler: the call must
+ * carry "authorization: Bearer <NEBO_SIDECAR_TOKEN>", compared in constant
+ * time over the expected value's length. */
+class SidecarTokenCheck final : public grpc::AuthMetadataProcessor {
+    const std::string expected_;
+public:
+    explicit SidecarTokenCheck(const char *token) : expected_(std::string("Bearer ") + token) {}
+
+    bool IsBlocking() const override { return false; }
+
+    grpc::Status Process(const InputMetadata &md, grpc::AuthContext *, OutputMetadata *,
+                         OutputMetadata *) override {
+        auto it = md.find("authorization");
+        if (it != md.end() && it->second.size() == expected_.size()) {
+            unsigned char diff = 0;
+            for (size_t i = 0; i < expected_.size(); i++) {
+                diff |= (unsigned char)(it->second.data()[i] ^ expected_[i]);
+            }
+            if (diff == 0) return grpc::Status::OK;
+        }
+        return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "missing or invalid sidecar token");
+    }
+};
+
+/* Set by SIGTERM/SIGINT or by stdin reaching EOF; the serve loop then
+ * shuts the server down. Only a lock-free atomic store happens in the
+ * signal handler. */
+static std::atomic<bool> g_stop{false};
 
 static void signal_handler(int) {
-    if (g_server) g_server->Shutdown();
+    g_stop = true;
 }
 
 extern "C" int nebo_grpc_serve(nebo_app_t *app) {
-    /* Remove stale socket */
-    unlink(app->sock_path);
+    /* Loopback only (local credentials refuse non-loopback peers); port 0
+     * lets the OS pick a free port. No handshake bytes, so Nebo's plaintext
+     * HTTP/2 client connects as is. */
+    auto creds = grpc::experimental::LocalServerCredentials(LOCAL_TCP);
+    creds->SetAuthMetadataProcessor(std::make_shared<SidecarTokenCheck>(app->sidecar_token));
 
-    std::string addr = std::string("unix:") + app->sock_path;
-
+    int port = 0;
     grpc::ServerBuilder builder;
-    builder.AddListeningPort(addr, grpc::InsecureServerCredentials());
+    builder.AddListeningPort("127.0.0.1:0", creds, &port);
 
     /* Conditionally register bridges for each non-NULL handler */
     ToolBridge     *tool_bridge     = nullptr;
@@ -891,10 +973,8 @@ extern "C" int nebo_grpc_serve(nebo_app_t *app) {
         gateway_bridge = new GatewayBridge(app->gateway, app);
         builder.RegisterService(gateway_bridge);
     }
-    if (app->ui) {
-        ui_bridge = new UIBridge(app->ui, app);
-        builder.RegisterService(ui_bridge);
-    }
+    ui_bridge = new UIBridge(app->ui, app, &port);
+    builder.RegisterService(ui_bridge);
     if (app->comm) {
         comm_bridge = new CommBridge(app->comm, app);
         builder.RegisterService(comm_bridge);
@@ -904,9 +984,9 @@ extern "C" int nebo_grpc_serve(nebo_app_t *app) {
         builder.RegisterService(schedule_bridge);
     }
 
-    g_server = builder.BuildAndStart();
-    if (!g_server) {
-        fprintf(stderr, "Failed to start gRPC server on %s\n", app->sock_path);
+    std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
+    if (!server) {
+        fprintf(stderr, "Failed to start gRPC server on 127.0.0.1\n");
         delete tool_bridge;
         delete channel_bridge;
         delete gateway_bridge;
@@ -916,13 +996,26 @@ extern "C" int nebo_grpc_serve(nebo_app_t *app) {
         return 1;
     }
 
+    /* Tell Nebo where to connect. stdout is a pipe, so flush. */
+    printf("nebo-app-listening 127.0.0.1:%d\n", port);
+    fflush(stdout);
+
     /* Graceful shutdown on SIGTERM/SIGINT */
     signal(SIGTERM, signal_handler);
     signal(SIGINT, signal_handler);
 
-    g_server->Wait();
+    /* Nebo holds stdin open for our whole life; EOF means Nebo is gone. */
+    std::thread([] {
+        char buf[256];
+        while (fread(buf, 1, sizeof(buf), stdin) > 0) {}
+        g_stop = true;
+    }).detach();
 
-    g_server.reset();
+    while (!g_stop) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    server->Shutdown(std::chrono::system_clock::now() + std::chrono::seconds(2));
+    server->Wait();
+    server.reset();
     delete tool_bridge;
     delete channel_bridge;
     delete gateway_bridge;
